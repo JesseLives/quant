@@ -1,0 +1,68 @@
+# Gold Quant Trading System - Configuration
+
+# Primary ticker for spot gold
+primary_ticker: "XAUUSD=X"
+
+# Macro tickers for additional features
+macro_tickers:
+  - "DX-Y.NYB"    # US Dollar Index
+  - "^TNX"        # 10-Year Treasury Yield
+  - "TIP"         # TIPS ETF (inflation proxy)
+  - "SPY"         # S&P 500 ETF
+  - "GLD"         # Gold ETF
+  - "TLT"         # 20+ Year Treasury ETF
+  - "^VIX"        # Volatility Index
+
+# Data settings
+lookback_days: 1260  # 5 years of daily data
+train_test_split: 0.8
+
+# Capital and risk settings
+initial_capital: 100000
+max_position_pct: 0.25
+max_drawdown_limit: 0.20
+
+# Transaction costs
+commission_per_unit: 0.0005  # 0.05% of notional per trade
+slippage_per_unit: 0.0003    # 0.03% slippage
+
+# Contract specifications
+lot_size: 100               # 1 standard lot = 100 oz
+entry_size_mult: 0.1        # Initial order size multiplier
+
+# Model settings
+model_settings:
+  lgb_params:
+    max_depth: 6
+    n_estimators: 200
+    learning_rate: 0.05
+    num_leaves: 31
+  logreg_params:
+    C: 1.0
+    l1_ratio: 0.5
+  mlp_params:
+    hidden_layers: [128, 64]
+    dropout: 0.3
+    epochs: 50
+    batch_size: 32
+    learning_rate: 0.001
+
+# Signal thresholds
+signal_thresholds:
+  long_threshold: 0.60
+  short_threshold: 0.40
+  confidence_exit: 0.55
+
+# Walk-forward backtest settings
+walkforward:
+  train_months: 24
+  test_months: 1
+  step_months: 1
+
+# Paths (relative to project root)
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  models: "models"
+  execution: "execution"
+  analytics: "analytics"
