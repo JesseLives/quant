@@ -1,0 +1,33 @@
+# Gold Quant Trading System - Requirements
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.30
+pyarrow>=14.0.0
+
+# Machine Learning
+scikit-learn>=1.3.0
+lightgbm>=4.0.0
+xgboost>=2.0.0
+
+# Deep Learning
+torch>=2.0.0
+
+# Technical Analysis
+ta-lib>=0.4.28
+pandas-ta>=0.3.14b
+
+# Configuration
+pyyaml>=6.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Testing
+pytest>=7.4.0
+
+# Utilities
+python-dateutil>=2.8.2
+joblib>=1.3.0
