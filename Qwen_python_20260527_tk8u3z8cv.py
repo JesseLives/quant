@@ -14,11 +14,10 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
 from typing import Optional, Tuple, List, Dict, Any
 
 # --- Suppress SSL warnings for self-signed camera certs ---
-def _try_import(name, install_hint=None):
+def _try_import(name):
     try:
         mod = __import__(name)
         if name == "requests":
@@ -28,8 +27,8 @@ def _try_import(name, install_hint=None):
     except ImportError:
         return None, False
 
-requests, _HAS_REQUESTS = _try_import("requests", "requests")
-cv2, _HAS_CV2 = _try_import("cv2", "opencv-python")
+requests, _HAS_REQUESTS = _try_import("requests")
+cv2, _HAS_CV2 = _try_import("cv2")
 
 # --- Thread-safe print ---
 _print_lock = threading.Lock()
@@ -191,7 +190,10 @@ class TokenBucketRateLimiter:
             if self.tokens >= 1.0:
                 self.tokens -= 1.0
                 return True
-        return True
+            # Edge case: floating-point rounding may leave tokens < 1.0
+            # Always consume one token after sleeping to prevent limit bypass
+            self.tokens = max(0.0, self.tokens - 1.0)
+            return True
 
 # --- Port scan result with error info ---
 @dataclass
@@ -251,13 +253,15 @@ class CCTVScanner:
         self.custom_credentials = self._load_custom_credentials()
 
         if network:
-            self.targets = list(ipaddress.IPv4Network(network, strict=False).hosts())
+            # Use iterator to avoid OOM on large networks - process targets lazily
+            self.targets = list(ipaddress.IPv4Network(network, strict=False).hosts())[:1024]  # Cap at 1024 hosts for safety
+            if len(self.targets) >= 1024:
+                safe_print(f"[!] Warning: Target list capped to first 1024 hosts. Full network has {len(list(ipaddress.IPv4Network(network, strict=False).hosts()))} hosts.")
         elif target:
             self.targets = [ipaddress.IPv4Address(target)]
         else:
-            self.targets = [
-                ipaddress.IPv4Address(f"192.168.1.{i}") for i in range(1, 255)
-            ]
+            # This should never happen due to CLI argument requirements
+            raise ValueError("Either --network or --target must be specified")
 
     def _load_custom_credentials(self) -> Dict[str, List[Tuple[str, str]]]:
         if not self.creds_file:
@@ -416,7 +420,8 @@ class CCTVScanner:
 
     def _scan_ports_parallel(self, ip, ports):
         results = []
-        with ThreadPoolExecutor(max_workers=min(len(ports), 20)) as ex:
+        # Reduce inner thread pool size to avoid thread explosion (30 hosts * 20 workers = 600 threads)
+        with ThreadPoolExecutor(max_workers=min(len(ports), 5)) as ex:
             futs = {ex.submit(self._check_port, ip, p): p for p in ports}
             for f in as_completed(futs):
                 try:
@@ -507,8 +512,13 @@ class CCTVScanner:
                 except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, ssl.SSLError, ConnectionError, OSError):
                     continue
                 except Exception as e:
-                    if _HAS_REQUESTS and isinstance(e, requests.RequestException):
-                        continue
+                    # Gracefully handle requests not being available (_HAS_REQUESTS is False)
+                    if _HAS_REQUESTS:
+                        try:
+                            if isinstance(e, requests.RequestException):
+                                continue
+                        except (AttributeError, TypeError):
+                            pass
                     continue
         return "unknown"
 
@@ -754,8 +764,10 @@ class CCTVScanner:
             r.login_page_detected = self._is_login_page(code, content)
 
         creds_list = self._get_credentials_for_brand(r.detected_brand)
+        # Fix: Do not pass session to worker threads - requests.Session is not thread-safe
+        # Each worker thread will create its own thread-local session
         user, pw, auth_type, is_verified = self._test_creds_parallel(
-            ip_str, http_port, creds_list, session=session
+            ip_str, http_port, creds_list, session=None
         )
         
         if user is not None:
@@ -774,7 +786,7 @@ class CCTVScanner:
 
         if r.credentials_verified:
             r.config_details = self._check_config(
-                ip_str, http_port, r.detected_brand, user, pw, session=session
+                ip_str, http_port, r.detected_brand, user, pw, session=None
             )
             r.default_config_accessible = any(
                 d.get("status") == 200 for d in r.config_details.values()
@@ -819,8 +831,13 @@ class CCTVScanner:
                 except Exception as e:
                     safe_print(f"  Error scanning {futs[f]}: {e}")
         finally:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._executor = None
+            if self._executor:
+                try:
+                    self._executor.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    # Python < 3.9 does not support cancel_futures parameter
+                    self._executor.shutdown(wait=False)
+                self._executor = None
 
         elapsed = time.time() - start
         safe_print("")
@@ -960,7 +977,7 @@ class CCTVScanner:
                     "brand": r.detected_brand,
                     "brand_source": r.brand_source,
                     "login_page": r.login_page_detected,
-                    "default_login": list(r.default_login) if r.default_login else None,
+                    "default_login": list(r.default_login_found) if r.default_login_found else None,
                     "auth_type": r.auth_type_used,
                     "verified": r.credentials_verified,
                     "rtsp": r.rtsp_accessible,
@@ -1034,7 +1051,11 @@ def main():
     def signal_handler(sig, frame):
         safe_print("\n[!] Interrupt received. Saving partial report and shutting down...")
         if scanner._executor:
-            scanner._executor.shutdown(wait=False, cancel_futures=True)
+            try:
+                scanner._executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                # Python < 3.9 does not support cancel_futures parameter
+                scanner._executor.shutdown(wait=False)
         if args.output:
             scanner.save_report_json(args.output)
         else:
